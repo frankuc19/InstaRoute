@@ -8,7 +8,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- Aviso de precarga para PapaParse -->
     <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.3.0/papaparse.min.js" as="script">
     
     <!-- 
@@ -234,7 +233,7 @@
                 <div class="p-6 bg-white rounded-lg shadow-md border border-gray-200">
                     <label for="gheet-url-input" class="block text-sm font-medium text-gray-700">URL de Google Sheet (publicado como CSV)</label>
                     <div class="flex flex-col md:flex-row gap-2 mt-1">
-                        <input type="text" id="gheet-url-input" value="https://docs.google.com/spreadsheets/d/e/2PACX-1vS17Lju7CnNJpzS7zb2l237sZMyC-GVj33iROvKqIVo8SB7mlmh7BwpOb2e9TDQn8n9Sl0FGtc02bIj/pub?output=csv" class="flex-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <input type="text" id="gheet-url-input" value="https://docs.google.com/spreadsheets/d/e/2PACX-1vS17Lju7CnNJpzS7zb2l237sZMyC-GVj33iROvKqIVo8SB7mlmh7BwpOb2e9TDQn8n9Sl0FGtc02bIj/pub?gid=170052325&single=true&output=csv" class="flex-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                         <button id="sync-gheet-btn" class="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-50" disabled>
                             Cargando...
                         </button>
@@ -303,7 +302,7 @@
     <!-- Cargar PapaParse ANTES que el script del módulo que lo usa -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.3.0/papaparse.min.js"></script>
 
-    <script type="module">
+    <script type(="module")>
         // Estado local de la aplicación (en lugar de Firebase)
         let allOrders = [];
         let processedJobs = [];
@@ -320,18 +319,13 @@
 
         // --- NAVEGACIÓN ---
         
-        // Hacer la función showView accesible globalmente
-        window.showView = (viewId) => {
+        const showView = (viewId) => {
             document.getElementById('view-dashboard').classList.toggle('hidden', viewId !== 'dashboard');
             document.getElementById('view-routing').classList.toggle('hidden', viewId !== 'routing');
             
             document.getElementById('tab-dashboard').classList.toggle('active', viewId === 'dashboard');
             document.getElementById('tab-routing').classList.toggle('active', viewId === 'routing');
         };
-        
-        // Asignar eventos a los botones de pestañas
-        document.getElementById('tab-dashboard').addEventListener('click', () => window.showView('dashboard'));
-        document.getElementById('tab-routing').addEventListener('click', () => window.showView('routing'));
 
         // --- INICIALIZACIÓN ---
 
@@ -343,6 +337,10 @@
                 initializeImporter();
                 document.getElementById('vrp-date').valueAsDate = new Date();
                 document.getElementById('export-routes-btn').disabled = true;
+                
+                // Asignar eventos de navegación
+                document.getElementById('tab-dashboard').addEventListener('click', () => showView('dashboard'));
+                document.getElementById('tab-routing').addEventListener('click', () => showView('routing'));
 
             } catch (error) {
                 console.error("Error inicializando la app:", error);
@@ -713,6 +711,9 @@
                 
                 if (pedidosParaRutear.length === 0) {
                      logToImportStatus(`Simulación finalizada: No hay pedidos para la fecha ${fecha}.`, true);
+                     generatedRoutes = [];
+                     unassignedOrders = [];
+                     renderResults(generatedRoutes, unassignedOrders);
                      return;
                 }
 
@@ -842,4 +843,5 @@
     </script>
 </body>
 </html>
+
 
