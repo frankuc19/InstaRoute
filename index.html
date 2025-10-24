@@ -78,6 +78,22 @@
             border-bottom-color: #4f46e5;
         }
         
+        /* Estilos para la zona de carga */
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            border-radius: 0.5rem;
+            padding: 2.5rem;
+            text-align: center;
+            color: #6b7280;
+            transition: all 0.2s ease-in-out;
+            cursor: pointer;
+        }
+        
+        .drop-zone.drag-over {
+            background-color: #eef2ff;
+            border-color: #4f46e5;
+        }
+        
         .loader {
             border: 4px solid #f3f3f3;
             border-top: 4px solid #4f46e5;
@@ -176,24 +192,25 @@
         <!-- Contenido Pestaña 2: Planificador de Rutas -->
         <div id="view-routing" class="hidden">
             
-            <!-- Paso 1: Importar desde Google Sheet -->
+            <!-- Paso 1: Cargar Archivo CSV -->
             <section id="importer" class="mb-8">
-                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Paso 1: Sincronizar desde Google Sheet</h2>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Paso 1: Cargar Archivo CSV</h2>
                 <p class="text-gray-600 mb-4">
-                    Pega el enlace de tu Google Sheet publicado en la web (en formato CSV) para cargar los pedidos en la memoria del navegador.
+                    Arrastra y suelta un archivo CSV o haz clic en la zona para seleccionarlo. Los datos se cargarán en la memoria del navegador.
                 </p>
                 <div class="p-6 bg-white rounded-lg shadow-md border border-gray-200">
-                    <label for="gheet-url-input" class="block text-sm font-medium text-gray-700">URL de Google Sheet (publicado como CSV)</label>
-                    <div class="flex flex-col md:flex-row gap-2 mt-1">
-                        <input type="text" id="gheet-url-input" value="https://docs.google.com/spreadsheets/d/e/2PACX-1vS17Lju7CnNJpzS7zb2l237sZMyC-GVj33iROvKqIVo8SB7mlmh7BwpOb2e9TDQn8n9Sl0FGtc02bIj/pub?gid=170052325&single=true&output=csv" class="flex-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                        <button id="sync-gheet-btn" class="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-50" disabled>
-                            Cargando...
+                    <div id="drop-zone" class="drop-zone">
+                        <p class="mb-2">Arrastra y suelta tu archivo CSV aquí</p>
+                        <p class="text-sm text-gray-500 mb-2">o</p>
+                        <button id="file-select-btn" class="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-50">
+                            Seleccionar Archivo
                         </button>
+                        <input type="file" id="file-input" class="hidden" accept=".csv">
                     </div>
                 </div>
                 <div id="import-status" class="mt-4">
-                    <h4 class="font-semibold">Log de Sincronización:</h4>
-                    <pre id="import-log" class="text-sm bg-gray-100 p-3 rounded-md h-32 overflow-y-auto">Esperando sincronización...</pre>
+                    <h4 class="font-semibold">Log de Carga:</h4>
+                    <pre id="import-log" class="text-sm bg-gray-100 p-3 rounded-md h-32 overflow-y-auto">Esperando archivo...</pre>
                 </div>
             </section>
 
@@ -293,12 +310,46 @@
         });
         
         function initializeImporter() {
-            // Se quitó la comprobación de Chart.js
             if (typeof Papa !== 'undefined') {
-                const syncButton = document.getElementById('sync-gheet-btn');
-                syncButton.disabled = false;
-                syncButton.textContent = 'Sincronizar Pedidos';
-                logToImportStatus("Librería lista. Sincronice para comenzar.", false);
+                
+                const dropZone = document.getElementById('drop-zone');
+                const fileInput = document.getElementById('file-input');
+                const fileSelectBtn = document.getElementById('file-select-btn');
+
+                if (!dropZone || !fileInput || !fileSelectBtn) {
+                     setTimeout(initializeImporter, 100); // Reintentar si el DOM no está listo
+                     return;
+                }
+
+                // Activar listeners
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, preventDefaults, false);
+                });
+                
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over'), false);
+                });
+                
+                ['dragleave', 'drop'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false);
+                });
+                
+                dropZone.addEventListener('drop', (e) => {
+                    const dt = e.dataTransfer;
+                    const files = dt.files;
+                    if (files.length > 0) {
+                        handleFile(files[0]);
+                    }
+                }, false);
+
+                fileSelectBtn.addEventListener('click', () => fileInput.click());
+                fileInput.addEventListener('change', (e) => {
+                    if (e.target.files.length > 0) {
+                        handleFile(e.target.files[0]);
+                    }
+                });
+                
+                logToImportStatus("Librería lista. Seleccione un archivo CSV.", false);
             } else {
                 logToImportStatus("Cargando librería de análisis...", false);
                 setTimeout(initializeImporter, 200);
@@ -462,47 +513,36 @@
 
         function setupRoutingListeners() {
             const genButton = document.getElementById('generate-routes-btn');
-            const syncButton = document.getElementById('sync-gheet-btn');
+            // El listener de sincronización ahora se configura en initializeImporter
             const exportButton = document.getElementById('export-routes-btn');
             
-            syncButton.addEventListener('click', syncFromGoogleSheet);
             genButton.addEventListener('click', triggerVRPGeneration);
             exportButton.addEventListener('click', exportRoutesToCSV);
         }
         
-        async function syncFromGoogleSheet() {
-            const urlInput = document.getElementById('gheet-url-input');
-            const url = urlInput.value;
-            
-            if (!url || !url.startsWith('https://docs.google.com/spreadsheets/')) {
-                logToImportStatus("Error: Por favor, ingrese una URL válida de Google Sheet publicada como CSV.", true);
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function handleFile(file) {
+            if (file.type !== "text/csv" && !file.name.endsWith(".csv") && file.type !== "application/vnd.ms-excel") {
+                logToImportStatus("Error: El archivo no es un CSV.", true);
                 return;
             }
             
-            logToImportStatus(`Descargando datos desde Google Sheet...`);
+            logToImportStatus(`Cargando archivo: ${file.name}...`);
             
-            try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    throw new Error(`Error al descargar: ${response.statusText}`);
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: (results) => {
+                    cleanAndStoreJobs(results.data);
+                },
+                error: (error) => {
+                    logToImportStatus(`Error al parsear CSV: ${error.message}`, true);
                 }
-                const csvText = await response.text();
-                logToImportStatus(`Datos descargados. Procesando ${csvText.length} bytes...`);
-                
-                Papa.parse(csvText, {
-                    header: true,
-                    skipEmptyLines: true,
-                    complete: (results) => {
-                        cleanAndStoreJobs(results.data);
-                    },
-                    error: (error) => {
-                        logToImportStatus(`Error al parsear CSV: ${error.message}`, true);
-                    }
-                });
-                
-            } catch (error) {
-                logToImportStatus(`Error de red: ${error.message}`, true);
-            }
+            });
         }
 
         function cleanAndStoreJobs(jobs) {
@@ -733,4 +773,3 @@
     </script>
 </body>
 </html>
-
