@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Control y Ruteo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- 
+    Chosen Palette: Industrial & Clear (Blue, Gray, Green, Red)
+    Application Structure Plan: 
+    Se ha diseñado una SPA con dos pestañas principales que reflejan el flujo de trabajo del despachador: "Monitor de Rutas" y "Planificador".
+    1. "Monitor de Rutas": Es la vista principal (dashboard). Muestra los resultados en tiempo real (Rutas Generadas y Pedidos No Asignados) escuchando directamente a Firestore. Permite al despachador ver el estado actual de la operación.
+    2. "Planificador": Contiene el flujo de trabajo de 3 pasos para *crear* las rutas: (1) Importar CSV (con limpieza de datos), (2) Ejecutar Generador (simula la llamada al backend de VRP), y (3) un log de estado.
+    Esta estructura separa la "vista de resultados" (Monitor) de la "vista de acciones" (Planificador), lo cual es una arquitectura de información intuitiva para un rol operativo.
+    
+    Visualization & Content Choices:
+    - Info: Lista de Rutas Generadas (Sección 5 del prompt)
+      - Goal: Informar
+      - Viz/Method: Lista de Tarjetas (HTML/Tailwind)
+      - Interaction: Actualización en tiempo real (Firestore onSnapshot).
+      - Justification: Muestra el resultado principal del VRP.
+    - Info: Lista de Pedidos No Asignados (Sección 3.3 y 5)
+      - Goal: Alertar, Informar
+      - Viz/Method: Lista de Items (HTML/Tailwind)
+      - Interaction: Actualización en tiempo real (Firestore onSnapshot).
+      - Justification: Muestra los pedidos que fallaron en la optimización y requieren acción manual.
+    - Info: Importación de CSV (Sección 1)
+      - Goal: Organizar, Cargar Datos
+      - Viz/Method: Área de Drag-and-Drop (HTML/JS) y log.
+      - Interaction: Carga de archivo, feedback visual (drag-over), log de estado.
+      - Justification: Implementa el requisito de carga de datos con la limpieza de lat/lon especificada.
+    - Info: Generador de Rutas (Sección 3)
+      - Goal: Ejecutar Lógica de Negocio
+      - Viz/Method: Formulario (Fecha, Nº Vehículos) y Botón.
+      - Interaction: Clic de botón.
+      - Justification: Es el disparador para el backend de VRP.
+
+    CONFIRMATION: NO SVG graphics used. NO Mermaid JS used.
+    -->
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f9fa; 
+        }
+        
+        .tab-button {
+            padding: 0.75rem 1.5rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            color: #6b7280;
+        }
+        
+        .tab-button.active {
+            color: #4f46e5;
+            border-bottom-color: #4f46e5;
+        }
+        
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            border-radius: 0.5rem;
+            padding: 2.5rem;
+            text-align: center;
+            color: #6b7280;
+            transition: all 0.2s ease-in-out;
+        }
+        
+        .drop-zone.drag-over {
+            background-color: #eef2ff;
+            border-color: #4f46e5;
+        }
+        
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4f46e5;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        
+        <header class="mb-6">
+            <h1 class="text-3xl font-bold text-gray-900">Plataforma de Ruteo "InstaRuta"</h1>
+            <p class="text-lg text-gray-600" id="report-date">Gestión de operaciones de última milla</p>
+        </header>
+
+        <!-- Navegación por Pestañas -->
+        <nav class="border-b border-gray-300 mb-8">
+            <div class="flex" id="tabs-container">
+                <button id="tab-dashboard" class="tab-button active">Monitor de Rutas</button>
+                <button id="tab-routing" class="tab-button">Planificador</button>
+            </div>
+        </nav>
+
+        <!-- Contenido Pestaña 1: Monitor de Rutas (Dashboard) -->
+        <div id="view-dashboard">
+            <section id="results">
+                <div class="flex flex-col md:flex-row justify-between items-center mb-4">
+                    <h2 class="text-2xl font-semibold text-gray-800">Resultados del Ruteo (En Vivo)</h2>
+                    <div>
+                        <label for="monitor-date" class="block text-sm font-medium text-gray-700">Fecha de Ruta</label>
+                        <input type="date" id="monitor-date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    </div>
+                </div>
+                <p class="text-gray-600 mb-4">
+                    Esta sección se actualiza automáticamente desde la base de datos. Muestra las rutas generadas por el optimizador y los pedidos que no pudieron ser asignados.
+                </p>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
+                        <h3 class="text-lg font-semibold mb-4 text-green-700">Rutas Generadas</h3>
+                        <div id="generated-routes-list" class="space-y-3 h-96 overflow-y-auto">
+                            <p class="text-gray-500">Esperando resultados...</p>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
+                        <h3 class="text-lg font-semibold mb-4 text-red-700">Pedidos No Asignados</h3>
+                        <div id="unassigned-jobs-list" class="space-y-2 h-96 overflow-y-auto">
+                           <p class="text-gray-500">Esperando resultados...</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Contenido Pestaña 2: Planificador -->
+        <div id="view-routing" class="hidden">
+            
+            <!-- Paso 1: Importar CSV -->
+            <section id="importer" class="mb-8">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Paso 1: Importar Pedidos (CSV)</h2>
+                <p class="text-gray-600 mb-4">
+                    Arrastre y suelte el archivo CSV de pedidos. El sistema limpiará los datos (lat/lon, fechas) y los subirá a Firestore con estado "pendiente".
+                </p>
+                
+                <input type="file" id="file-input" class="hidden" accept=".csv">
+                <div id="drop-zone" class="drop-zone cursor-pointer">
+                    <p class="mb-2">Arrastra y suelta tu archivo CSV aquí</p>
+                    <p class="text-sm text-gray-500 mb-4">o</p>
+                    <button id="select-file-btn" class="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-50" disabled>
+                        Cargando...
+                    </button>
+                </div>
+
+                <div id="import-status" class="mt-4">
+                    <h4 class="font-semibold">Log de Importación:</h4>
+                    <pre id="import-log" class="text-sm bg-gray-100 p-3 rounded-md h-32 overflow-y-auto">Esperando archivo...</pre>
+                </div>
+            </section>
+
+            <!-- Paso 2: Generar Rutas -->
+            <section id="generator" class="mb-8">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Paso 2: Generar Rutas</h2>
+                <p class="text-gray-600 mb-4">
+                    Seleccione la fecha y el número de vehículos, luego ejecute el planificador. Esto invocará al backend de VRP.
+                </p>
+                <div class="p-6 bg-white rounded-lg shadow-md border border-gray-200 flex flex-col md:flex-row items-center gap-4">
+                    <div>
+                        <label for="vrp-date" class="block text-sm font-medium text-gray-700">Fecha de Ruta</label>
+                        <input type="date" id="vrp-date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label for="vrp-vehicles" class="block text-sm font-medium text-gray-700">Nº de Vehículos</label>
+                        <input type="number" id="vrp-vehicles" value="4" min="1" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    </div>
+                    <div class="mt-auto">
+                        <button id="generate-routes-btn" class="flex items-center justify-center px-6 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
+                            <span id="btn-text">Generar Rutas (Simulación)</span>
+                            <div id="btn-loader" class="loader hidden ml-2"></div>
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Cargar PapaParse ANTES que el script del módulo que lo usa -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.3.0/papaparse.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            signInWithCustomToken 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            collection, 
+            addDoc, 
+            writeBatch,
+            query,
+            where,
+            getDocs,
+            onSnapshot,
+            GeoPoint,
+            Timestamp,
+            setLogLevel
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        let db, auth;
+        let activeView = 'dashboard';
+        let unassignedListener = null;
+        let routesListener = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                if (!firebaseConfig.apiKey) {
+                    console.error("Firebase config is missing.");
+                    logToImportStatus("Error: Configuración de Firebase no encontrada.", true);
+                    return;
+                }
+
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug');
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                
+                logToImportStatus(`Firebase conectado. UID: ${auth.currentUser.uid.substring(0, 10)}...`);
+
+                setupTabListeners();
+                setupRoutingListeners();
+                
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('monitor-date').value = today;
+                document.getElementById('vrp-date').value = today;
+
+                listenToRoutingResults();
+                checkPapaParseReady(); // Iniciar el verificador de PapaParse
+
+            } catch (error) {
+                console.error("Error inicializando Firebase:", error);
+                logToImportStatus(`Error de inicialización: ${error.message}`, true);
+            }
+        });
+        
+        function checkPapaParseReady() {
+            if (typeof Papa !== 'undefined') {
+                logToImportStatus("Librería de análisis lista. Puede importar.", false);
+                const selectBtn = document.getElementById('select-file-btn');
+                selectBtn.disabled = false;
+                selectBtn.textContent = 'Seleccionar Archivo';
+                setupImporter(); // Ahora sí, activa los listeners
+            } else {
+                logToImportStatus("Cargando librería de análisis...", false);
+                setTimeout(checkPapaParseReady, 200); // Revisa de nuevo
+            }
+        }
+        
+        function setupTabListeners() {
+            const tabsContainer = document.getElementById('tabs-container');
+            tabsContainer.addEventListener('click', (e) => {
+                const targetId = e.target.id;
+                if (targetId === 'tab-dashboard') {
+                    showView('dashboard');
+                } else if (targetId === 'tab-routing') {
+                    showView('routing');
+                }
+            });
+        }
+        
+        function showView(viewId) {
+            activeView = viewId;
+            document.getElementById('view-dashboard').classList.toggle('hidden', viewId !== 'dashboard');
+            document.getElementById('view-routing').classList.toggle('hidden', viewId !== 'routing');
+            
+            document.getElementById('tab-dashboard').classList.toggle('active', viewId === 'dashboard');
+            document.getElementById('tab-routing').classList.toggle('active', viewId === 'routing');
+        }
+
+        function logToImportStatus(message, isError = false) {
+            const logEl = document.getElementById('import-log');
+            if (logEl) {
+                logEl.textContent = message;
+                logEl.style.color = isError ? '#ef4444' : '#10b981';
+            }
+        }
+
+        function setupImporter() {
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('file-input');
+            const selectBtn = document.getElementById('select-file-btn');
+            let isProcessing = false;
+
+            if (!dropZone || !fileInput || !selectBtn) return;
+
+            const triggerFileInput = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isProcessing) return;
+                fileInput.click();
+            };
+            
+            dropZone.addEventListener('click', triggerFileInput);
+            
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+            });
+            
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, () => {
+                    if (isProcessing) return;
+                    dropZone.classList.add('drag-over');
+                }, false);
+            });
+            
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false);
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                if (isProcessing) return;
+                const dt = e.dataTransfer;
+                const file = dt.files[0];
+                isProcessing = true;
+                handleFile(file).finally(() => { isProcessing = false; });
+            }, false);
+            
+            fileInput.addEventListener('change', (e) => {
+                if (isProcessing) return;
+                if (e.target.files.length) {
+                    isProcessing = true;
+                    handleFile(e.target.files[0]).finally(() => { 
+                        isProcessing = false;
+                        e.target.value = null; // Permite resubir el mismo archivo
+                    });
+                }
+            });
+        }
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function handleFile(file) {
+            return new Promise((resolve, reject) => {
+                if (!file || file.type !== 'text/csv') {
+                    logToImportStatus('Error: Por favor, suelte un archivo .csv válido.', true);
+                    return reject(new Error('Invalid file type'));
+                }
+                
+                logToImportStatus(`Cargando archivo: ${file.name}...`);
+                
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => {
+                        cleanAndUploadJobs(results.data)
+                            .then(resolve)
+                            .catch(reject);
+                    },
+                    error: (error) => {
+                        logToImportStatus(`Error al parsear CSV: ${error.message}`, true);
+                        reject(error);
+                    }
+                });
+            });
+        }
+        
+        function cleanCoordinate(coord) {
+            if (typeof coord !== 'string') return null;
+            return parseFloat(coord.replace(',', '.'));
+        }
+        
+        function parseDate(dateString) {
+            if (!dateString) return null;
+            try {
+                // Intenta parsear formato "2025-10-23 17:00:00" (a veces viene con .000)
+                if (dateString.includes('-') && dateString.includes(':')) {
+                    return Timestamp.fromDate(new Date(dateString.split('.')[0]));
+                }
+                
+                // Intenta parsear formato "23/10/2025" (Fecha Formalizada)
+                if (dateString.includes('/') && !dateString.includes(':')) {
+                    const parts = dateString.split('/');
+                    if (parts.length === 3) {
+                         // Formato DD/MM/YYYY
+                        return Timestamp.fromDate(new Date(`${parts[2]}-${parts[1]}-${parts[0]}`));
+                    }
+                }
+                
+                // Si falla, intenta parseo directo
+                const date = new Date(dateString);
+                if (!isNaN(date.getTime())) {
+                    return Timestamp.fromDate(date);
+                }
+                
+                return null;
+
+            } catch (e) {
+                console.warn(`Fecha inválida: ${dateString}`);
+                return null;
+            }
+        }
+
+
+        async function cleanAndUploadJobs(jobs) {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const userId = auth.currentUser?.uid || 'anonymous';
+            const collectionPath = `artifacts/${appId}/users/${userId}/pedidos`;
+            let batch = writeBatch(db);
+            let processedCount = 0;
+            let skippedCount = 0;
+
+            logToImportStatus(`Limpiando y preparando ${jobs.length} pedidos...`);
+
+            try {
+                for (const job of jobs) {
+                    const jobNum = job.Job_Number || job.job_Number;
+                    
+                    if (!jobNum) {
+                        skippedCount++;
+                        continue;
+                    }
+                    
+                    const lat = cleanCoordinate(job.Destino_Latitud);
+                    const lon = cleanCoordinate(job.Destino_Longitud);
+                    const origenLat = cleanCoordinate(job.Origen_Latitud);
+                    const origenLon = cleanCoordinate(job.Origen_Longitud);
+                    
+                    const slotInicio = parseDate(job.Slot_Inicio);
+                    const slotFin = parseDate(job.Slot_Fin);
+                    const fechaFormalizada = parseDate(job.Fecha_Formalizada || job.Fecha_Creacion);
+
+                    if (isNaN(lat) || isNaN(lon) || isNaN(origenLat) || isNaN(origenLon) || !slotInicio || !slotFin || !fechaFormalizada) {
+                        console.warn("Saltando fila por datos incompletos:", jobNum, {lat, lon, origenLat, origenLon, slotInicio, slotFin, fechaFormalizada});
+                        skippedCount++;
+                        continue;
+                    }
+
+                    const docRef = doc(collection(db, collectionPath));
+                    batch.set(docRef, {
+                        job_Number: jobNum,
+                        tienda: job.Tienda || null,
+                        fecha_Formalizada: fechaFormalizada,
+                        slot_Inicio: slotInicio,
+                        slot_Fin: slotFin,
+                        origen: new GeoPoint(origenLat, origenLon),
+                        destino: new GeoPoint(lat, lon),
+                        estado: "pendiente",
+                        id_Ruta_Asignada: null,
+                    });
+                    processedCount++;
+                    
+                    if (processedCount > 0 && processedCount % 499 === 0) {
+                         await batch.commit();
+                         batch = writeBatch(db);
+                         logToImportStatus(`Subidos ${processedCount} pedidos...`);
+                    }
+                }
+                
+                await batch.commit();
+                logToImportStatus(`Éxito: Se subieron ${processedCount} pedidos. Se omitieron ${skippedCount} filas.`, false);
+
+            } catch (error) {
+                console.error("Error al subir a Firestore:", error);
+                logToImportStatus(`Error al subir: ${error.message}`, true);
+            }
+        }
+        
+        function setupRoutingListeners() {
+            const genButton = document.getElementById('generate-routes-btn');
+            genButton.addEventListener('click', triggerVRPSimulation);
+            
+            const monitorDate = document.getElementById('monitor-date');
+            monitorDate.addEventListener('change', listenToRoutingResults);
+        }
+        
+        function getStartOfDay(dateString) {
+            const date = new Date(dateString + 'T00:00:00-06:00'); // Asumir zona horaria local si es necesario
+            return Timestamp.fromDate(date);
+        }
+        
+        function getEndOfDay(dateString) {
+            const date = new Date(dateString + 'T23:59:59.999-06:00'); // Asumir zona horaria local
+            return Timestamp.fromDate(date);
+        }
+
+        // SIMULACIÓN DE BACKEND DE VRP
+        async function triggerVRPSimulation() {
+            const genButton = document.getElementById('generate-routes-btn');
+            const btnText = document.getElementById('btn-text');
+            const btnLoader = document.getElementById('btn-loader');
+            
+            genButton.disabled = true;
+            btnText.textContent = 'Generando...';
+            btnLoader.classList.remove('hidden');
+
+            const fecha = document.getElementById('vrp-date').value;
+            const numVehicles = parseInt(document.getElementById('vrp-vehicles').value, 10);
+
+            logToImportStatus(`Iniciando simulación de VRP para ${fecha} con ${numVehicles} vehículos...`, false);
+            
+            try {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const userId = auth.currentUser?.uid || 'anonymous';
+                const pedidosCollection = `artifacts/${appId}/users/${userId}/pedidos`;
+                const rutasCollection = `artifacts/${appId}/public/data/rutas`;
+                
+                // 1. Obtener pedidos pendientes para la fecha
+                const startOfDay = getStartOfDay(fecha);
+                const endOfDay = getEndOfDay(fecha);
+                
+                const q = query(collection(db, pedidosCollection),
+                    where("estado", "==", "pendiente"),
+                    where("fecha_Formalizada", ">=", startOfDay),
+                    where("fecha_Formalizada", "<=", endOfDay)
+                );
+                
+                const querySnapshot = await getDocs(q);
+                const pedidosPendientes = [];
+                querySnapshot.forEach(doc => {
+                    pedidosPendientes.push({ id: doc.id, ...doc.data() });
+                });
+                
+                logToImportStatus(`Se encontraron ${pedidosPendientes.length} pedidos pendientes...`);
+                
+                if (pedidosPendientes.length === 0) {
+                    logToImportStatus("No hay pedidos pendientes para rutear.", false);
+                    genButton.disabled = false;
+                    btnText.textContent = 'Generar Rutas (Simulación)';
+                    btnLoader.classList.add('hidden');
+                    return;
+                }
+
+                // 2. Lógica de Simulación (Round-Robin)
+                const rutasSimuladas = Array.from({ length: numVehicles }, () => ({
+                    pedidos_Asignados: [],
+                    job_Numbers: []
+                }));
+                
+                let pedidosNoAsignados = [];
+                
+                pedidosPendientes.forEach((pedido, index) => {
+                    if (index % 10 === 0 && index > 0) { // Simular 1 de cada 10 como no asignado
+                         pedidosNoAsignados.push(pedido.id);
+                    } else {
+                        const vehicleIndex = index % numVehicles;
+                        rutasSimuladas[vehicleIndex].pedidos_Asignados.push(pedido.id);
+                        rutasSimuladas[vehicleIndex].job_Numbers.push(pedido.job_Number);
+                    }
+                });
+
+                logToImportStatus(`Simulación completada. Asignando ${pedidosPendientes.length - pedidosNoAsignados.length} pedidos a ${numVehicles} vehículos.`);
+
+                // 3. Escribir resultados en Firestore
+                let batch = writeBatch(db);
+                let writeCount = 0;
+                
+                // Escribir rutas
+                for (const [index, ruta] of rutasSimuladas.entries()) {
+                    if (ruta.pedidos_Asignados.length > 0) {
+                        const rutaDocRef = doc(collection(db, rutasCollection));
+                        batch.set(rutaDocRef, {
+                            fecha: startOfDay,
+                            vehiculo_ID: `Vehiculo ${index + 1}`,
+                            estado_Ruta: "planificada",
+                            pedidos_Asignados: ruta.job_Numbers
+                        });
+                        writeCount++;
+                        
+                        // Actualizar estado de pedidos asignados
+                        for (const pedidoId of ruta.pedidos_Asignados) {
+                            const pedidoDocRef = doc(db, pedidosCollection, pedidoId);
+                            batch.update(pedidoDocRef, {
+                                estado: "asignado",
+                                id_Ruta_Asignada: rutaDocRef.id
+                            });
+                            writeCount++;
+                            if (writeCount >= 499) {
+                                await batch.commit();
+                                batch = writeBatch(db);
+                                writeCount = 0;
+                            }
+                        }
+                    }
+                }
+                
+                // Actualizar estado de pedidos no asignados
+                for (const pedidoId of pedidosNoAsignados) {
+                     const pedidoDocRef = doc(db, pedidosCollection, pedidoId);
+                     batch.update(pedidoDocRef, { estado: "no_asignado" });
+                     writeCount++;
+                     if (writeCount >= 499) {
+                        await batch.commit();
+                        batch = writeBatch(db);
+                        writeCount = 0;
+                     }
+                }
+                
+                await batch.commit();
+                logToImportStatus("¡Simulación completada! Rutas y estados actualizados en Firestore.", false);
+
+            } catch (error) {
+                console.error("Error en la simulación de VRP:", error);
+                if (error.code === 'failed-precondition' && error.message.includes('index')) {
+                    logToImportStatus('Error: La consulta de ruteo requiere un índice. Por favor, cree el índice en la consola de Firebase.', true);
+                } else {
+                    logToImportStatus(`Error: ${error.message}`, true);
+                }
+            } finally {
+                genButton.disabled = false;
+                btnText.textContent = 'Generar Rutas (Simulación)';
+                btnLoader.classList.add('hidden');
+            }
+        }
+        
+        function listenToRoutingResults() {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const userId = auth.currentUser?.uid || 'anonymous';
+            const fecha = document.getElementById('monitor-date').value;
+            
+            if (!fecha || !db || !auth.currentUser) {
+                console.log("Faltan datos (fecha, db o auth) para listener");
+                return;
+            }
+            
+            const startOfDay = getStartOfDay(fecha);
+            const endOfDay = getEndOfDay(fecha);
+            
+            // Detener listeners anteriores
+            if (routesListener) routesListener();
+            if (unassignedListener) unassignedListener();
+            
+            // Listener para Rutas
+            const routesQuery = query(collection(db, `artifacts/${appId}/public/data/rutas`),
+                where("fecha", "==", startOfDay)
+            );
+            routesListener = onSnapshot(routesQuery, (snapshot) => {
+                const listEl = document.getElementById('generated-routes-list');
+                listEl.innerHTML = '';
+                if (snapshot.empty) {
+                    listEl.innerHTML = '<p class="text-gray-500">No se han generado rutas para esta fecha.</p>';
+                    return;
+                }
+                snapshot.forEach(doc => {
+                    const ruta = doc.data();
+                    const card = document.createElement('div');
+                    card.className = 'p-3 border rounded-md bg-gray-50 shadow-sm';
+                    card.innerHTML = `
+                        <h4 class="font-semibold text-indigo-700">${ruta.vehiculo_ID || 'Ruta'} (ID: ${doc.id.substring(0,6)})</h4>
+                        <p class="text-sm text-gray-600">Pedidos: ${ruta.pedidos_Asignados?.join(', ') || 'N/A'}</p>
+                        <p class="text-xs text-gray-500">Estado: ${ruta.estado_Ruta || 'planificada'}</p>
+                    `;
+                    listEl.appendChild(card);
+                });
+            }, (error) => console.error("Error escuchando rutas: ", error));
+            
+            // Listener para No Asignados
+            const unassignedQuery = query(collection(db, `artifacts/${appId}/users/${userId}/pedidos`),
+                where("estado", "==", "no_asignado")
+            );
+            
+            const startOfDayDate = startOfDay.toDate();
+            const endOfDayDate = endOfDay.toDate();
+
+            unassignedListener = onSnapshot(unassignedQuery, (snapshot) => {
+                const listEl = document.getElementById('unassigned-jobs-list');
+                listEl.innerHTML = '';
+                
+                if (snapshot.empty) {
+                    listEl.innerHTML = '<p class="text-gray-500">No hay pedidos no asignados en total.</p>';
+                    return;
+                }
+                
+                let count = 0;
+                snapshot.forEach(doc => {
+                    const pedido = doc.data();
+                    const fechaPedido = pedido.fecha_Formalizada?.toDate();
+                    
+                    // Filtro manual de fecha en el cliente
+                    if (fechaPedido && fechaPedido >= startOfDayDate && fechaPedido <= endOfDayDate) {
+                        count++;
+                        const item = document.createElement('div');
+                        item.className = 'p-2 border-b';
+                        item.innerHTML = `
+                            <p class="font-medium text-red-600">${pedido.job_Number}</p>
+                            <p class="text-sm text-gray-500">Tienda: ${pedido.tienda} / Slot: ${pedido.slot_Inicio?.toDate().toLocaleTimeString('es-ES') || 'N/A'}</p>
+                        `;
+                        listEl.appendChild(item);
+                    }
+                });
+                
+                if (count === 0) {
+                     listEl.innerHTML = '<p class="text-gray-500">No hay pedidos no asignados para esta fecha.</p>';
+                }
+
+            }, (error) => console.error("Error escuchando no asignados: ", error));
+        }
+
+    </script>
+</body>
+</html>
+
