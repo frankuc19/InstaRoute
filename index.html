@@ -24,18 +24,18 @@
     - Info: Lista de Pedidos No Asignados (Sección 3.3 y 5)
       - Goal: Alertar, Informar
       - Viz/Method: Lista de Items (HTML/Tailwind)
-      - Interaction: Actualización en tiempo real (Firestore onSnapshot).
+      - Interaction: Actualización en tiempo real (Firestore onSnapshot, con filtro de fecha en cliente para evitar índices).
       - Justification: Muestra los pedidos que fallaron en la optimización y requieren acción manual.
     - Info: Importación de CSV (Sección 1)
       - Goal: Organizar, Cargar Datos
       - Viz/Method: Área de Drag-and-Drop (HTML/JS) y log.
-      - Interaction: Carga de archivo, feedback visual (drag-over), log de estado.
-      - Justification: Implementa el requisito de carga de datos con la limpieza de lat/lon especificada.
+      - Interaction: Carga de archivo (drag-drop y clic), feedback visual (drag-over), log de estado.
+      - Justification: Implementa el requisito de carga de datos con la limpieza de lat/lon especificada. Usa PapaParse.
     - Info: Generador de Rutas (Sección 3)
       - Goal: Ejecutar Lógica de Negocio
       - Viz/Method: Formulario (Fecha, Nº Vehículos) y Botón.
-      - Interaction: Clic de botón.
-      - Justification: Es el disparador para el backend de VRP.
+      - Interaction: Clic de botón que dispara una simulación JS del backend.
+      - Justification: Simula el trigger del VRP y actualiza Firestore, completando el flujo.
 
     CONFIRMATION: NO SVG graphics used. NO Mermaid JS used.
     -->
@@ -116,7 +116,7 @@
                     </div>
                 </div>
                 <p class="text-gray-600 mb-4">
-                    Esta sección se actualiza automáticamente desde la base de datos. Muestra las rutas generadas por el optimizador y los pedidos que no pudieron ser asignados.
+                    Esta sección se actualiza automáticamente desde la base de datos. Muestra las rutas generadas por el optimizador y los pedidos que no pudieron ser asignados para la fecha seleccionada.
                 </p>
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
@@ -142,7 +142,7 @@
             <section id="importer" class="mb-8">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4">Paso 1: Importar Pedidos (CSV)</h2>
                 <p class="text-gray-600 mb-4">
-                    Arrastre y suelte el archivo CSV de pedidos. El sistema limpiará los datos (lat/lon, fechas) y los subirá a Firestore con estado "pendiente".
+                    Arrastre y suelte el archivo CSV de pedidos (ej. `Ruteo Instaleaps - Detalle Pedidos.csv`). El sistema limpiará los datos (lat/lon, fechas) y los subirá a Firestore con estado "pendiente".
                 </p>
                 
                 <input type="file" id="file-input" class="hidden" accept=".csv">
@@ -150,7 +150,7 @@
                     <p class="mb-2">Arrastra y suelta tu archivo CSV aquí</p>
                     <p class="text-sm text-gray-500 mb-4">o</p>
                     <button id="select-file-btn" class="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-50" disabled>
-                        Cargando...
+                        Cargando librería...
                     </button>
                 </div>
 
@@ -164,7 +164,7 @@
             <section id="generator" class="mb-8">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4">Paso 2: Generar Rutas</h2>
                 <p class="text-gray-600 mb-4">
-                    Seleccione la fecha y el número de vehículos, luego ejecute el planificador. Esto invocará al backend de VRP.
+                    Seleccione la fecha y el número de vehículos, luego ejecute el planificador. Esto simulará la llamada al backend de VRP y actualizará la base de datos.
                 </p>
                 <div class="p-6 bg-white rounded-lg shadow-md border border-gray-200 flex flex-col md:flex-row items-center gap-4">
                     <div>
@@ -200,7 +200,6 @@
             getFirestore, 
             doc, 
             collection, 
-            addDoc, 
             writeBatch,
             query,
             where,
@@ -218,6 +217,7 @@
 
         document.addEventListener('DOMContentLoaded', async () => {
             try {
+                // Configuración de Firebase (inyectada por el entorno)
                 const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
                 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
@@ -230,8 +230,9 @@
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                setLogLevel('Debug');
+                setLogLevel('Debug'); // Habilitar logs detallados de Firestore
 
+                // Autenticación (inyectada por el entorno)
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
@@ -240,6 +241,7 @@
                 
                 logToImportStatus(`Firebase conectado. UID: ${auth.currentUser.uid.substring(0, 10)}...`);
 
+                // Configuración de la UI
                 setupTabListeners();
                 setupRoutingListeners();
                 
@@ -247,7 +249,7 @@
                 document.getElementById('monitor-date').value = today;
                 document.getElementById('vrp-date').value = today;
 
-                listenToRoutingResults();
+                listenToRoutingResults(); // Iniciar listeners del monitor
                 checkPapaParseReady(); // Iniciar el verificador de PapaParse
 
             } catch (error) {
@@ -256,19 +258,27 @@
             }
         });
         
+        /**
+         * Verifica si la librería PapaParse está cargada.
+         * Si no, espera 200ms y vuelve a verificar.
+         * Si sí, activa el botón de importación y los listeners.
+         */
         function checkPapaParseReady() {
             if (typeof Papa !== 'undefined') {
                 logToImportStatus("Librería de análisis lista. Puede importar.", false);
                 const selectBtn = document.getElementById('select-file-btn');
                 selectBtn.disabled = false;
                 selectBtn.textContent = 'Seleccionar Archivo';
-                setupImporter(); // Ahora sí, activa los listeners
+                setupImporter(); // Activa los listeners de importación
             } else {
                 logToImportStatus("Cargando librería de análisis...", false);
                 setTimeout(checkPapaParseReady, 200); // Revisa de nuevo
             }
         }
         
+        /**
+         * Configura los listeners para las pestañas de navegación.
+         */
         function setupTabListeners() {
             const tabsContainer = document.getElementById('tabs-container');
             tabsContainer.addEventListener('click', (e) => {
@@ -281,6 +291,9 @@
             });
         }
         
+        /**
+         * Muestra la vista (pestaña) seleccionada y oculta la otra.
+         */
         function showView(viewId) {
             activeView = viewId;
             document.getElementById('view-dashboard').classList.toggle('hidden', viewId !== 'dashboard');
@@ -290,6 +303,9 @@
             document.getElementById('tab-routing').classList.toggle('active', viewId === 'routing');
         }
 
+        /**
+         * Muestra un mensaje en el log de importación.
+         */
         function logToImportStatus(message, isError = false) {
             const logEl = document.getElementById('import-log');
             if (logEl) {
@@ -298,23 +314,29 @@
             }
         }
 
+        /**
+         * Configura los listeners para el área de importación (drag-drop y clic).
+         */
         function setupImporter() {
             const dropZone = document.getElementById('drop-zone');
             const fileInput = document.getElementById('file-input');
-            const selectBtn = document.getElementById('select-file-btn');
             let isProcessing = false;
 
-            if (!dropZone || !fileInput || !selectBtn) return;
+            if (!dropZone || !fileInput) return;
 
+            // Función para disparar el input de archivo
             const triggerFileInput = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 if (isProcessing) return;
+                fileInput.value = null; // Permite resubir el mismo archivo
                 fileInput.click();
             };
             
+            // Clic en toda la zona o en el botón
             dropZone.addEventListener('click', triggerFileInput);
             
+            // Listeners de Drag & Drop
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
                 dropZone.addEventListener(eventName, preventDefaults, false);
             });
@@ -330,6 +352,7 @@
                 dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false);
             });
 
+            // Manejar el archivo soltado
             dropZone.addEventListener('drop', (e) => {
                 if (isProcessing) return;
                 const dt = e.dataTransfer;
@@ -338,26 +361,37 @@
                 handleFile(file).finally(() => { isProcessing = false; });
             }, false);
             
+            // Manejar el archivo seleccionado por clic
             fileInput.addEventListener('change', (e) => {
                 if (isProcessing) return;
                 if (e.target.files.length) {
                     isProcessing = true;
                     handleFile(e.target.files[0]).finally(() => { 
                         isProcessing = false;
-                        e.target.value = null; // Permite resubir el mismo archivo
                     });
                 }
             });
         }
         
+        /**
+         * Previene los comportamientos por defecto del navegador (para drag-drop).
+         */
         function preventDefaults(e) {
             e.preventDefault();
             e.stopPropagation();
         }
 
+        /**
+         * Maneja el archivo (CSV) cargado, pasándolo a PapaParse.
+         */
         function handleFile(file) {
             return new Promise((resolve, reject) => {
-                if (!file || file.type !== 'text/csv') {
+                if (typeof Papa === 'undefined') {
+                    logToImportStatus('Error: La librería de análisis (PapaParse) no está cargada.', true);
+                    return reject(new Error('PapaParse not loaded'));
+                }
+                
+                if (!file || (file.type !== 'text/csv' && !file.name.endsWith('.csv'))) {
                     logToImportStatus('Error: Por favor, suelte un archivo .csv válido.', true);
                     return reject(new Error('Invalid file type'));
                 }
@@ -380,30 +414,40 @@
             });
         }
         
+        /**
+         * Limpia las coordenadas que vienen con coma (ej. "25,822501").
+         */
         function cleanCoordinate(coord) {
-            if (typeof coord !== 'string') return null;
+            if (typeof coord !== 'string' || !coord) return null;
             return parseFloat(coord.replace(',', '.'));
         }
         
+        /**
+         * Parsea diferentes formatos de fecha/hora a un Timestamp de Firestore.
+         */
         function parseDate(dateString) {
             if (!dateString) return null;
             try {
-                // Intenta parsear formato "2025-10-23 17:00:00" (a veces viene con .000)
+                let date;
+                // Formato: "2025-10-23 17:00:00.000" (Slot_Inicio, Slot_Fin)
                 if (dateString.includes('-') && dateString.includes(':')) {
-                    return Timestamp.fromDate(new Date(dateString.split('.')[0]));
+                    date = new Date(dateString.split('.')[0].replace(' ', 'T'));
                 }
-                
-                // Intenta parsear formato "23/10/2025" (Fecha Formalizada)
-                if (dateString.includes('/') && !dateString.includes(':')) {
+                // Formato: "23/10/2025" (Fecha Formalizada)
+                else if (dateString.includes('/') && !dateString.includes(':')) {
                     const parts = dateString.split('/');
                     if (parts.length === 3) {
                          // Formato DD/MM/YYYY
-                        return Timestamp.fromDate(new Date(`${parts[2]}-${parts[1]}-${parts[0]}`));
+                        date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`);
+                    } else {
+                        throw new Error('Formato DD/MM/YYYY inválido');
                     }
                 }
+                // Intento genérico
+                else {
+                    date = new Date(dateString);
+                }
                 
-                // Si falla, intenta parseo directo
-                const date = new Date(dateString);
                 if (!isNaN(date.getTime())) {
                     return Timestamp.fromDate(date);
                 }
@@ -411,12 +455,14 @@
                 return null;
 
             } catch (e) {
-                console.warn(`Fecha inválida: ${dateString}`);
+                console.warn(`Fecha inválida: ${dateString}`, e.message);
                 return null;
             }
         }
 
-
+        /**
+         * Procesa los trabajos del CSV, los limpia y los sube a Firestore en lotes.
+         */
         async function cleanAndUploadJobs(jobs) {
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
             const userId = auth.currentUser?.uid || 'anonymous';
@@ -436,6 +482,7 @@
                         continue;
                     }
                     
+                    // Limpieza de datos (Sección 1.2 del prompt)
                     const lat = cleanCoordinate(job.Destino_Latitud);
                     const lon = cleanCoordinate(job.Destino_Longitud);
                     const origenLat = cleanCoordinate(job.Origen_Latitud);
@@ -445,12 +492,14 @@
                     const slotFin = parseDate(job.Slot_Fin);
                     const fechaFormalizada = parseDate(job.Fecha_Formalizada || job.Fecha_Creacion);
 
+                    // Validar datos cruciales
                     if (isNaN(lat) || isNaN(lon) || isNaN(origenLat) || isNaN(origenLon) || !slotInicio || !slotFin || !fechaFormalizada) {
                         console.warn("Saltando fila por datos incompletos:", jobNum, {lat, lon, origenLat, origenLon, slotInicio, slotFin, fechaFormalizada});
                         skippedCount++;
                         continue;
                     }
 
+                    // Modelo de Datos (Sección 2 del prompt)
                     const docRef = doc(collection(db, collectionPath));
                     batch.set(docRef, {
                         job_Number: jobNum,
@@ -460,11 +509,12 @@
                         slot_Fin: slotFin,
                         origen: new GeoPoint(origenLat, origenLon),
                         destino: new GeoPoint(lat, lon),
-                        estado: "pendiente",
+                        estado: "pendiente", // Estado inicial
                         id_Ruta_Asignada: null,
                     });
                     processedCount++;
                     
+                    // Firestore tiene un límite de ~500 operaciones por lote
                     if (processedCount > 0 && processedCount % 499 === 0) {
                          await batch.commit();
                          batch = writeBatch(db);
@@ -472,7 +522,7 @@
                     }
                 }
                 
-                await batch.commit();
+                await batch.commit(); // Commit del lote final
                 logToImportStatus(`Éxito: Se subieron ${processedCount} pedidos. Se omitieron ${skippedCount} filas.`, false);
 
             } catch (error) {
@@ -481,6 +531,9 @@
             }
         }
         
+        /**
+         * Configura los listeners para los botones de la pestaña "Planificador".
+         */
         function setupRoutingListeners() {
             const genButton = document.getElementById('generate-routes-btn');
             genButton.addEventListener('click', triggerVRPSimulation);
@@ -489,17 +542,26 @@
             monitorDate.addEventListener('change', listenToRoutingResults);
         }
         
+        /**
+         * Obtiene el Timestamp de inicio del día (00:00:00) para una fecha.
+         */
         function getStartOfDay(dateString) {
-            const date = new Date(dateString + 'T00:00:00-06:00'); // Asumir zona horaria local si es necesario
+            const date = new Date(dateString + 'T00:00:00'); // Asume hora local
             return Timestamp.fromDate(date);
         }
         
+        /**
+         * Obtiene el Timestamp de fin del día (23:59:59) para una fecha.
+         */
         function getEndOfDay(dateString) {
-            const date = new Date(dateString + 'T23:59:59.999-06:00'); // Asumir zona horaria local
+            const date = new Date(dateString + 'T23:59:59.999'); // Asume hora local
             return Timestamp.fromDate(date);
         }
 
-        // SIMULACIÓN DE BACKEND DE VRP
+        /**
+         * SIMULACIÓN DEL BACKEND DE VRP (Sección 3 del prompt)
+         * Esto simula la Google Cloud Function en JavaScript.
+         */
         async function triggerVRPSimulation() {
             const genButton = document.getElementById('generate-routes-btn');
             const btnText = document.getElementById('btn-text');
@@ -520,7 +582,7 @@
                 const pedidosCollection = `artifacts/${appId}/users/${userId}/pedidos`;
                 const rutasCollection = `artifacts/${appId}/public/data/rutas`;
                 
-                // 1. Obtener pedidos pendientes para la fecha
+                // 1. Obtener pedidos pendientes para la fecha (Sección 3.1)
                 const startOfDay = getStartOfDay(fecha);
                 const endOfDay = getEndOfDay(fecha);
                 
@@ -546,44 +608,47 @@
                     return;
                 }
 
-                // 2. Lógica de Simulación (Round-Robin)
+                // 2. Lógica de Simulación VRP (Round-Robin) (Sección 3.2)
                 const rutasSimuladas = Array.from({ length: numVehicles }, () => ({
-                    pedidos_Asignados: [],
+                    pedidos_Asignados_Ids: [],
                     job_Numbers: []
                 }));
                 
-                let pedidosNoAsignados = [];
+                let pedidosNoAsignadosIds = [];
                 
+                // Simulación simple: asigna pedidos por turnos (round-robin)
                 pedidosPendientes.forEach((pedido, index) => {
-                    if (index % 10 === 0 && index > 0) { // Simular 1 de cada 10 como no asignado
-                         pedidosNoAsignados.push(pedido.id);
+                    // Simular 1 de cada 10 como no asignado (dropped node)
+                    if (index % 10 === 0 && index > 0) { 
+                         pedidosNoAsignadosIds.push(pedido.id);
                     } else {
                         const vehicleIndex = index % numVehicles;
-                        rutasSimuladas[vehicleIndex].pedidos_Asignados.push(pedido.id);
+                        rutasSimuladas[vehicleIndex].pedidos_Asignados_Ids.push(pedido.id);
                         rutasSimuladas[vehicleIndex].job_Numbers.push(pedido.job_Number);
                     }
                 });
 
-                logToImportStatus(`Simulación completada. Asignando ${pedidosPendientes.length - pedidosNoAsignados.length} pedidos a ${numVehicles} vehículos.`);
+                logToImportStatus(`Simulación completada. Asignando ${pedidosPendientes.length - pedidosNoAsignadosIds.length} pedidos a ${numVehicles} vehículos.`);
 
-                // 3. Escribir resultados en Firestore
+                // 3. Escribir resultados en Firestore (Sección 3.3)
                 let batch = writeBatch(db);
                 let writeCount = 0;
                 
-                // Escribir rutas
+                // Escribir nuevas rutas
                 for (const [index, ruta] of rutasSimuladas.entries()) {
-                    if (ruta.pedidos_Asignados.length > 0) {
+                    if (ruta.pedidos_Asignados_Ids.length > 0) {
                         const rutaDocRef = doc(collection(db, rutasCollection));
+                        // Modelo de Datos 'rutas' (Sección 2)
                         batch.set(rutaDocRef, {
                             fecha: startOfDay,
                             vehiculo_ID: `Vehiculo ${index + 1}`,
                             estado_Ruta: "planificada",
-                            pedidos_Asignados: ruta.job_Numbers
+                            pedidos_Asignados: ruta.job_Numbers // Array ordenado
                         });
                         writeCount++;
                         
-                        // Actualizar estado de pedidos asignados
-                        for (const pedidoId of ruta.pedidos_Asignados) {
+                        // Actualizar estado de pedidos "asignado"
+                        for (const pedidoId of ruta.pedidos_Asignados_Ids) {
                             const pedidoDocRef = doc(db, pedidosCollection, pedidoId);
                             batch.update(pedidoDocRef, {
                                 estado: "asignado",
@@ -599,8 +664,8 @@
                     }
                 }
                 
-                // Actualizar estado de pedidos no asignados
-                for (const pedidoId of pedidosNoAsignados) {
+                // Actualizar estado de pedidos "no_asignado"
+                for (const pedidoId of pedidosNoAsignadosIds) {
                      const pedidoDocRef = doc(db, pedidosCollection, pedidoId);
                      batch.update(pedidoDocRef, { estado: "no_asignado" });
                      writeCount++;
@@ -611,13 +676,15 @@
                      }
                 }
                 
-                await batch.commit();
+                await batch.commit(); // Commit final
                 logToImportStatus("¡Simulación completada! Rutas y estados actualizados en Firestore.", false);
 
             } catch (error) {
                 console.error("Error en la simulación de VRP:", error);
+                // Error común si el índice de Firestore no está creado
                 if (error.code === 'failed-precondition' && error.message.includes('index')) {
-                    logToImportStatus('Error: La consulta de ruteo requiere un índice. Por favor, cree el índice en la consola de Firebase.', true);
+                    logToImportStatus('Error: La consulta de ruteo requiere un índice. Por favor, cree el índice en la consola de Firebase. El link está en la consola de desarrollador (F12).', true);
+                    console.error("Error de índice de Firestore. El backend real necesitaría este índice:", error.message);
                 } else {
                     logToImportStatus(`Error: ${error.message}`, true);
                 }
@@ -628,6 +695,9 @@
             }
         }
         
+        /**
+         * Configura los listeners de Firestore (onSnapshot) para el Monitor de Rutas.
+         */
         function listenToRoutingResults() {
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
             const userId = auth.currentUser?.uid || 'anonymous';
@@ -641,11 +711,11 @@
             const startOfDay = getStartOfDay(fecha);
             const endOfDay = getEndOfDay(fecha);
             
-            // Detener listeners anteriores
+            // Detener listeners anteriores para evitar duplicados
             if (routesListener) routesListener();
             if (unassignedListener) unassignedListener();
             
-            // Listener para Rutas
+            // Listener para Rutas Generadas (Sección 5)
             const routesQuery = query(collection(db, `artifacts/${appId}/public/data/rutas`),
                 where("fecha", "==", startOfDay)
             );
@@ -669,7 +739,8 @@
                 });
             }, (error) => console.error("Error escuchando rutas: ", error));
             
-            // Listener para No Asignados
+            // Listener para Pedidos No Asignados (Sección 5)
+            // Query sin filtro de fecha para evitar error de índice
             const unassignedQuery = query(collection(db, `artifacts/${appId}/users/${userId}/pedidos`),
                 where("estado", "==", "no_asignado")
             );
@@ -691,14 +762,14 @@
                     const pedido = doc.data();
                     const fechaPedido = pedido.fecha_Formalizada?.toDate();
                     
-                    // Filtro manual de fecha en el cliente
+                    // Filtro manual de fecha en el cliente (para evitar error de índice de Firestore)
                     if (fechaPedido && fechaPedido >= startOfDayDate && fechaPedido <= endOfDayDate) {
                         count++;
                         const item = document.createElement('div');
                         item.className = 'p-2 border-b';
                         item.innerHTML = `
                             <p class="font-medium text-red-600">${pedido.job_Number}</p>
-                            <p class="text-sm text-gray-500">Tienda: ${pedido.tienda} / Slot: ${pedido.slot_Inicio?.toDate().toLocaleTimeString('es-ES') || 'N/A'}</p>
+                            <p class="text-sm text-gray-500">Tienda: ${pedido.tienda} / Slot: ${pedido.slot_Inicio?.toDate().toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'}) || 'N/A'}</p>
                         `;
                         listEl.appendChild(item);
                     }
@@ -708,7 +779,13 @@
                      listEl.innerHTML = '<p class="text-gray-500">No hay pedidos no asignados para esta fecha.</p>';
                 }
 
-            }, (error) => console.error("Error escuchando no asignados: ", error));
+            }, (error) => {
+                console.error("Error escuchando no asignados: ", error);
+                // Esto maneja el error de índice si ocurre (aunque el filtro de cliente debería prevenirlo)
+                if (error.code === 'failed-precondition' && error.message.includes('index')) {
+                     document.getElementById('unassigned-jobs-list').innerHTML = `<p class="text-red-500">Error: Se requiere un índice de Firestore. Revise la consola (F12) para ver el enlace y crearlo.</p>`;
+                }
+            });
         }
 
     </script>
