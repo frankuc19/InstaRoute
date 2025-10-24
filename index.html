@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Control y Ruteo (Local)</title>
+    <title>Panel de Control y Ruteo (Local-Lite)</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.3.0/papaparse.min.js" as="script">
@@ -13,20 +12,18 @@
     <!-- 
     Chosen Palette: Minimalist Neutrals (Warm Grays)
     Application Structure Plan: 
-    App rediseñada para funcionar 100% en el navegador SIN FIREBASE.
-    1. Pestaña "Dashboard": Se pobla dinámicamente desde una variable JS local (`allOrders`) después de la sincronización.
-    2. Pestaña "Planificador de Rutas": Implementa el flujo de trabajo en 3 pasos:
-       - Paso 1: Sincronizar (Google Sheet) -> Limpia datos -> Almacena en la variable local `allOrders`. Dispara la actualización del Dashboard.
-       - Paso 2: Generar Rutas -> Ejecuta una simulación de VRP (local) sobre `allOrders`.
-       - Paso 3: Resultados -> Muestra los resultados (variables `generatedRoutes` y `unassignedOrders`) y activa un nuevo botón "Exportar Rutas (CSV)" para descargar los resultados.
-    Esta estructura mantiene la UI pero reemplaza toda la lógica de base de datos por un estado local en JS.
+    App rediseñada para ser ultra-ligera.
+    1. Se eliminó Chart.js y toda la sección de visualizaciones/gráficos para una carga más rápida.
+    2. Pestaña "Dashboard": Ahora solo muestra KPIs y la tabla de datos, poblada desde `allOrders`.
+    3. Pestaña "Planificador de Rutas": Mantiene el flujo de 3 pasos (Sync, Plan, Export) 100% local.
+    4. Se mantiene PapaParse.js ya que es esencial para leer el formato CSV que entrega la URL de Google Sheets.
 
     Visualization & Content Choices:
-    - (Dashboard) Info: KPIs, Gráficos, Tabla.
+    - (Dashboard) Info: KPIs, Tabla.
       - Goal: Informar.
-      - Viz/Method: Tarjetas, Gráficos Chart.js, Tabla HTML.
+      - Viz/Method: Tarjetas, Tabla HTML.
       - Interaction: Tooltips, Filtros.
-      - Justification: Resumen operativo, ahora alimentado por `allOrders`.
+      - Justification: Resumen operativo, alimentado por `allOrders`. Gráficos eliminados por velocidad.
     - (Planificador) Info: Sincronización Google Sheet.
       - Goal: Cargar datos.
       - Viz/Method: Input de URL, botón de sincronización.
@@ -50,20 +47,6 @@
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f8f9fa; 
-        }
-        .chart-container {
-            position: relative;
-            width: 100%;
-            max-width: 600px;
-            height: 320px;
-            max-height: 400px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        @media (min-width: 768px) {
-            .chart-container {
-                height: 360px;
-            }
         }
         
         .table-container {
@@ -132,7 +115,7 @@
             <section id="kpis" class="mb-8">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4">Resumen del Día</h2>
                 <p class="text-gray-600 mb-4">
-                    Esta sección proporciona una vista de alto nivel de las métricas operativas clave del día. Use estas tarjetas para entender rápidamente el volumen y la escala de los pedidos gestionados.
+                    Esta sección proporciona una vista de alto nivel de las métricas operativas clave del día.
                 </p>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
@@ -150,43 +133,12 @@
                 </div>
             </section>
 
-            <section id="visualizations" class="mb-8">
-                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Visualizaciones de Distribución</h2>
-                <p class="text-gray-600 mb-4">
-                    Los siguientes gráficos desglosan la carga de trabajo del día. Analice estos gráficos para identificar horas pico, las tiendas con más volumen y las características predominantes de los pedidos.
-                </p>
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
-                        <h3 class="text-lg font-semibold text-center mb-4">Pedidos por Hora (Slot)</h3>
-                        <div class="chart-container">
-                            <canvas id="jobsByHourChart"></canvas>
-                        </div>
-                    </div>
-                    <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
-                        <h3 class="text-lg font-semibold text-center mb-4">Pedidos por Tienda</h3>
-                        <div class="chart-container">
-                            <canvas id="jobsByStoreChart"></canvas>
-                        </div>
-                    </div>
-                    <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
-                        <h3 class="text-lg font-semibold text-center mb-4">Métodos de Pago</h3>
-                        <div class="chart-container">
-                            <canvas id="jobsByPaymentChart"></canvas>
-                        </div>
-                    </div>
-                    <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200">
-                        <h3 class="text-lg font-semibold text-center mb-4">Modelos Operativos</h3>
-                        <div class="chart-container">
-                            <canvas id="jobsByModelChart"></canvas>
-                        </div>
-                    </div>
-                </div>
-            </section>
+            <!-- Sección de Visualizaciones eliminada para mayor velocidad -->
 
             <section id="data-explorer">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4">Explorador de Pedidos</h2>
                 <p class="text-gray-600 mb-4">
-                    Utilice las herramientas de filtro a continuación para buscar pedidos específicos. Puede buscar por Job Number, Tienda o Cliente, o filtrar por un slot de tiempo específico para ver los detalles.
+                    Utilice las herramientas de filtro a continuación para buscar pedidos específicos.
                 </p>
                 <div class="flex flex-col md:flex-row gap-4 mb-4 p-4 bg-white rounded-lg shadow-sm border border-gray-200">
                     <div class="flex-1">
@@ -309,14 +261,6 @@
         let generatedRoutes = [];
         let unassignedOrders = [];
         
-        let charts = {};
-        const chartColors = {
-            blue: 'rgba(59, 130, 246, 0.7)', indigo: 'rgba(79, 70, 229, 0.7)',
-            green: 'rgba(16, 185, 129, 0.7)', pink: 'rgba(236, 72, 153, 0.7)',
-            yellow: 'rgba(245, 158, 11, 0.7)', purple: 'rgba(139, 92, 246, 0.7)',
-            teal: 'rgba(20, 184, 166, 0.7)', red: 'rgba(239, 68, 68, 0.7)',
-        };
-
         // --- NAVEGACIÓN ---
         
         const showView = (viewId) => {
@@ -349,13 +293,14 @@
         });
         
         function initializeImporter() {
-            if (typeof Papa !== 'undefined' && typeof Chart !== 'undefined') {
+            // Se quitó la comprobación de Chart.js
+            if (typeof Papa !== 'undefined') {
                 const syncButton = document.getElementById('sync-gheet-btn');
                 syncButton.disabled = false;
                 syncButton.textContent = 'Sincronizar Pedidos';
-                logToImportStatus("Librerías listas. Sincronice para comenzar.", false);
+                logToImportStatus("Librería lista. Sincronice para comenzar.", false);
             } else {
-                logToImportStatus("Cargando librerías de análisis...", false);
+                logToImportStatus("Cargando librería de análisis...", false);
                 setTimeout(initializeImporter, 200);
             }
         }
@@ -401,7 +346,7 @@
             }));
             
             renderKPIs();
-            renderCharts();
+            // renderCharts() fue eliminado
             populateSlotFilter();
             renderTable(processedJobs);
         }
@@ -463,62 +408,7 @@
             }
         }
 
-        function aggregateData(key) {
-            return processedJobs.reduce((acc, job) => {
-                const value = job[key] || 'N/A';
-                acc[value] = (acc[value] || 0) + 1;
-                return acc;
-            }, {});
-        }
-
-        function renderCharts() {
-            const colorValues = Object.values(chartColors);
-            
-            Object.values(charts).forEach(chart => chart.destroy());
-
-            if (processedJobs.length === 0) return;
-
-            const jobsByHourData = aggregateData('Slot_Hour');
-            const sortedHours = Object.keys(jobsByHourData).sort();
-            charts.jobsByHour = new Chart(document.getElementById('jobsByHourChart'), {
-                type: 'bar',
-                data: {
-                    labels: sortedHours,
-                    datasets: [{ label: 'Nº de Pedidos', data: sortedHours.map(h => jobsByHourData[h]), backgroundColor: chartColors.blue }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
-            });
-
-            const jobsByStoreData = aggregateData('tienda');
-            charts.jobsByStore = new Chart(document.getElementById('jobsByStoreChart'), {
-                type: 'doughnut',
-                data: {
-                    labels: Object.keys(jobsByStoreData),
-                    datasets: [{ data: Object.values(jobsByStoreData), backgroundColor: colorValues }]
-                },
-                options: { responsive: true, maintainAspectRatio: false }
-            });
-
-            const jobsByPaymentData = aggregateData('metodo_Pago');
-            charts.jobsByPayment = new Chart(document.getElementById('jobsByPaymentChart'), {
-                type: 'pie',
-                data: {
-                    labels: Object.keys(jobsByPaymentData),
-                    datasets: [{ data: Object.values(jobsByPaymentData), backgroundColor: [chartColors.green, chartColors.indigo, chartColors.yellow, chartColors.pink] }]
-                },
-                options: { responsive: true, maintainAspectRatio: false }
-            });
-            
-            const jobsByModelData = aggregateData('modelo_Operativo');
-            charts.jobsByModel = new Chart(document.getElementById('jobsByModelChart'), {
-                type: 'bar',
-                data: {
-                    labels: Object.keys(jobsByModelData).map(l => l.length > 25 ? l.substring(0, 25) + '...' : l),
-                    datasets: [{ label: 'Nº de Pedidos', data: Object.values(jobsByModelData), backgroundColor: chartColors.purple }]
-                },
-                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { beginAtZero: true } } }
-            });
-        }
+        // aggregateData() y renderCharts() fueron eliminados
         
         function populateSlotFilter() {
             const slotFilter = document.getElementById('slot-filter');
@@ -843,5 +733,4 @@
     </script>
 </body>
 </html>
-
 
